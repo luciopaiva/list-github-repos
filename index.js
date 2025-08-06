@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
+const FETCH_COMMIT_COUNT = false;
+
 class GitHubRepoLister {
   constructor() {
     this.octokit = null;
@@ -45,12 +47,30 @@ class GitHubRepoLister {
     try {
       console.log(`Fetching repositories for user: ${username}`);
       
-      // Get all repositories (both public and private)
-      const repos = await this.octokit.paginate(this.octokit.rest.repos.listForUser, {
-        username: username,
-        type: 'all', // includes public and private repos
-        per_page: 100,
-      });
+      // First, get the authenticated user to check if we're querying our own repos
+      const authenticatedUser = await this.octokit.rest.users.getAuthenticated();
+      const isOwnRepos = authenticatedUser.data.login.toLowerCase() === username.toLowerCase();
+      
+      let repos;
+      
+      if (isOwnRepos) {
+        console.log('Fetching your own repositories (including private ones)...');
+        // Use listForAuthenticatedUser to get all repos including private ones
+        repos = await this.octokit.paginate(this.octokit.rest.repos.listForAuthenticatedUser, {
+          visibility: 'all', // all, public, private
+          affiliation: 'owner', // owner, collaborator, organization_member
+          sort: 'updated',
+          per_page: 100,
+        });
+      } else {
+        console.log('Fetching repositories for another user (public only)...');
+        // Use listForUser for other users (only public repos will be visible)
+        repos = await this.octokit.paginate(this.octokit.rest.repos.listForUser, {
+          username: username,
+          type: 'all',
+          per_page: 100,
+        });
+      }
 
       console.log(`Found ${repos.length} repositories`);
       return repos;
@@ -85,15 +105,15 @@ class GitHubRepoLister {
 
       // Get total commit count by getting all commits (this might be slow for repos with many commits)
       // For better performance, we'll use a different approach
-      const allCommits = await this.octokit.paginate(this.octokit.rest.repos.listCommits, {
+      const allCommits = FETCH_COMMIT_COUNT ? await this.octokit.paginate(this.octokit.rest.repos.listCommits, {
         owner: owner,
         repo: repo,
         sha: defaultBranch,
         per_page: 100,
-      });
+      }) : [];
 
       return {
-        commitCount: allCommits.length,
+        commitCount: FETCH_COMMIT_COUNT ? allCommits.length : -1,
         lastCommitDate: commits.data.length > 0 ? commits.data[0].commit.committer.date : null,
       };
     } catch (error) {
@@ -176,10 +196,19 @@ class GitHubRepoLister {
       
       console.log('Starting GitHub repository analysis...');
       
+      // Check if we're analyzing our own repos
+      const authenticatedUser = await this.octokit.rest.users.getAuthenticated();
+      const isOwnRepos = authenticatedUser.data.login.toLowerCase() === username.toLowerCase();
+      
       const repositories = await this.processRepositories(username);
       await this.generateCSV(repositories, outputPath);
       
       console.log('\n=== Summary ===');
+      if (isOwnRepos) {
+        console.log(`Analyzed your own repositories (including private ones)`);
+      } else {
+        console.log(`Analyzed repositories for user: ${username} (public only)`);
+      }
       console.log(`Total repositories: ${repositories.length}`);
       console.log(`Private repositories: ${repositories.filter(r => r.private).length}`);
       console.log(`Public repositories: ${repositories.filter(r => !r.private).length}`);
