@@ -5,6 +5,7 @@ const path = require('path');
 require('dotenv').config();
 
 const FETCH_COMMIT_COUNT = false;
+const CONCURRENCY_LIMIT = 10;
 
 class GitHubRepoLister {
   constructor() {
@@ -104,7 +105,6 @@ class GitHubRepoLister {
       });
 
       // Get total commit count by getting all commits (this might be slow for repos with many commits)
-      // For better performance, we'll use a different approach
       const allCommits = FETCH_COMMIT_COUNT ? await this.octokit.paginate(this.octokit.rest.repos.listCommits, {
         owner: owner,
         repo: repo,
@@ -125,16 +125,31 @@ class GitHubRepoLister {
     }
   }
 
+  // Helper function to process items concurrently with a limit
+  async processConcurrently(items, processor, concurrency = CONCURRENCY_LIMIT) {
+    const results = [];
+    for (let i = 0; i < items.length; i += concurrency) {
+      const batch = items.slice(i, i + concurrency);
+      const batchPromises = batch.map(async (item, index) => {
+        const globalIndex = i + index;
+        console.log(`Processing ${globalIndex + 1}/${items.length}: ${item.name}`);
+        return processor(item, globalIndex);
+      });
+      
+      const batchResults = await Promise.all(batchPromises);
+      results.push(...batchResults);
+    }
+    return results;
+  }
+
   async processRepositories(username) {
     const repos = await this.getUserRepos(username);
-    const processedRepos = [];
 
     console.log('Processing repository details...');
+    console.log(`Using concurrency limit: ${CONCURRENCY_LIMIT}`);
     
-    for (let i = 0; i < repos.length; i++) {
-      const repo = repos[i];
-      console.log(`Processing ${i + 1}/${repos.length}: ${repo.name}`);
-
+    // Define the processor function for each repository
+    const processRepo = async (repo, index) => {
       // Get commit information
       const commitInfo = await this.getRepoCommitInfo(repo.owner.login, repo.name);
 
@@ -157,8 +172,11 @@ class GitHubRepoLister {
         size: repo.size, // Size in KB
       };
 
-      processedRepos.push(repoData);
-    }
+      return repoData;
+    };
+
+    // Process repositories concurrently
+    const processedRepos = await this.processConcurrently(repos, processRepo, CONCURRENCY_LIMIT);
 
     return processedRepos;
   }
@@ -198,7 +216,11 @@ class GitHubRepoLister {
         process.exit(1);
       }
 
-      const outputPath = outputFile || `${username}-repositories.csv`;
+      // Generate timestamp for filename
+      const now = new Date();
+      const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19); // Format: 2025-08-06T13-15-30
+      
+      const outputPath = outputFile || `${username}-repositories-${timestamp}.csv`;
       
       console.log('Starting GitHub repository analysis...');
       
