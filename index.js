@@ -143,6 +143,8 @@ class GitHubRepoLister {
         fullName: repo.full_name,
         private: repo.private,
         archived: repo.archived,
+        fork: repo.fork,
+        forkedFrom: repo.fork && repo.parent ? repo.parent.full_name : '',
         description: repo.description || '',
         url: repo.html_url,
         stars: repo.stargazers_count,
@@ -169,6 +171,8 @@ class GitHubRepoLister {
         { id: 'fullName', title: 'Full Name' },
         { id: 'private', title: 'Private' },
         { id: 'archived', title: 'Archived' },
+        { id: 'fork', title: 'Is Fork' },
+        { id: 'forkedFrom', title: 'Forked From' },
         { id: 'description', title: 'Description' },
         { id: 'url', title: 'URL' },
         { id: 'stars', title: 'Stars' },
@@ -215,6 +219,8 @@ class GitHubRepoLister {
       console.log(`Private repositories: ${repositories.filter(r => r.private).length}`);
       console.log(`Public repositories: ${repositories.filter(r => !r.private).length}`);
       console.log(`Archived repositories: ${repositories.filter(r => r.archived).length}`);
+      console.log(`Forked repositories: ${repositories.filter(r => r.fork).length}`);
+      console.log(`Original repositories: ${repositories.filter(r => !r.fork).length}`);
       console.log(`Total stars: ${repositories.reduce((sum, r) => sum + r.stars, 0)}`);
       console.log(`Output saved to: ${outputPath}`);
       
