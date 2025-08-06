@@ -160,7 +160,7 @@ class GitHubRepoLister {
         archived: repo.archived,
         fork: repo.fork,
         forkedFrom: repo.fork && repo.parent ? repo.parent.full_name : '',
-        empty: repo.size === 0 || commitInfo.lastCommitDate === null,
+        empty: commitInfo.lastCommitDate === null,
         description: repo.description || '',
         url: repo.html_url,
         stars: repo.stargazers_count,
