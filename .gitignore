@@ -1,0 +1,27 @@
+# Environment variables
+.env
+
+# Credentials file
+credentials.json
+
+# Node modules
+node_modules/
+
+# npm debug logs
+npm-debug.log*
+
+# Output files
+*.csv
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Log files
+*.log
+
+*-repositories.csv

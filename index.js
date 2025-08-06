@@ -1,0 +1,205 @@
+const { Octokit } = require('@octokit/rest');
+const createCsvWriter = require('csv-writer').createObjectCsvWriter;
+const fs = require('fs');
+const path = require('path');
+require('dotenv').config();
+
+class GitHubRepoLister {
+  constructor() {
+    this.octokit = null;
+    this.initializeClient();
+  }
+
+  initializeClient() {
+    // Try to get credentials from environment variables first
+    let token = process.env.GITHUB_TOKEN;
+
+    // If no env variable, try to read from credentials file
+    if (!token) {
+      try {
+        const credentialsPath = path.join(__dirname, 'credentials.json');
+        if (fs.existsSync(credentialsPath)) {
+          const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+          token = credentials.github_token;
+        }
+      } catch (error) {
+        console.warn('Could not read credentials file:', error.message);
+      }
+    }
+
+    if (!token) {
+      console.error('GitHub token not found. Please provide it via:');
+      console.error('1. Environment variable: GITHUB_TOKEN');
+      console.error('2. credentials.json file with format: {"github_token": "your_token_here"}');
+      process.exit(1);
+    }
+
+    this.octokit = new Octokit({
+      auth: token,
+    });
+
+    console.log('GitHub client initialized successfully');
+  }
+
+  async getUserRepos(username) {
+    try {
+      console.log(`Fetching repositories for user: ${username}`);
+      
+      // Get all repositories (both public and private)
+      const repos = await this.octokit.paginate(this.octokit.rest.repos.listForUser, {
+        username: username,
+        type: 'all', // includes public and private repos
+        per_page: 100,
+      });
+
+      console.log(`Found ${repos.length} repositories`);
+      return repos;
+    } catch (error) {
+      console.error('Error fetching repositories:', error.message);
+      if (error.status === 404) {
+        console.error('User not found or you don\'t have access to their repositories');
+      } else if (error.status === 401) {
+        console.error('Invalid GitHub token or insufficient permissions');
+      }
+      throw error;
+    }
+  }
+
+  async getRepoCommitInfo(owner, repo) {
+    try {
+      // Get the default branch first
+      const repoInfo = await this.octokit.rest.repos.get({
+        owner: owner,
+        repo: repo,
+      });
+
+      const defaultBranch = repoInfo.data.default_branch;
+
+      // Get commits for the default branch
+      const commits = await this.octokit.rest.repos.listCommits({
+        owner: owner,
+        repo: repo,
+        sha: defaultBranch,
+        per_page: 1, // We only need the latest commit for the date
+      });
+
+      // Get total commit count by getting all commits (this might be slow for repos with many commits)
+      // For better performance, we'll use a different approach
+      const allCommits = await this.octokit.paginate(this.octokit.rest.repos.listCommits, {
+        owner: owner,
+        repo: repo,
+        sha: defaultBranch,
+        per_page: 100,
+      });
+
+      return {
+        commitCount: allCommits.length,
+        lastCommitDate: commits.data.length > 0 ? commits.data[0].commit.committer.date : null,
+      };
+    } catch (error) {
+      console.warn(`Could not fetch commit info for ${owner}/${repo}:`, error.message);
+      return {
+        commitCount: 0,
+        lastCommitDate: null,
+      };
+    }
+  }
+
+  async processRepositories(username) {
+    const repos = await this.getUserRepos(username);
+    const processedRepos = [];
+
+    console.log('Processing repository details...');
+    
+    for (let i = 0; i < repos.length; i++) {
+      const repo = repos[i];
+      console.log(`Processing ${i + 1}/${repos.length}: ${repo.name}`);
+
+      // Get commit information
+      const commitInfo = await this.getRepoCommitInfo(repo.owner.login, repo.name);
+
+      const repoData = {
+        name: repo.name,
+        fullName: repo.full_name,
+        private: repo.private,
+        description: repo.description || '',
+        url: repo.html_url,
+        stars: repo.stargazers_count,
+        forks: repo.forks_count,
+        language: repo.language || 'N/A',
+        createdAt: repo.created_at,
+        updatedAt: repo.updated_at,
+        commitCount: commitInfo.commitCount,
+        lastCommitDate: commitInfo.lastCommitDate,
+        size: repo.size, // Size in KB
+      };
+
+      processedRepos.push(repoData);
+    }
+
+    return processedRepos;
+  }
+
+  async generateCSV(repositories, outputPath) {
+    const csvWriter = createCsvWriter({
+      path: outputPath,
+      header: [
+        { id: 'name', title: 'Repository Name' },
+        { id: 'fullName', title: 'Full Name' },
+        { id: 'private', title: 'Private' },
+        { id: 'description', title: 'Description' },
+        { id: 'url', title: 'URL' },
+        { id: 'stars', title: 'Stars' },
+        { id: 'forks', title: 'Forks' },
+        { id: 'language', title: 'Primary Language' },
+        { id: 'commitCount', title: 'Commit Count' },
+        { id: 'lastCommitDate', title: 'Last Commit Date' },
+        { id: 'createdAt', title: 'Created Date' },
+        { id: 'updatedAt', title: 'Updated Date' },
+        { id: 'size', title: 'Size (KB)' },
+      ],
+    });
+
+    await csvWriter.writeRecords(repositories);
+    console.log(`CSV file generated: ${outputPath}`);
+  }
+
+  async run(username, outputFile = null) {
+    try {
+      if (!username) {
+        console.error('Please provide a GitHub username');
+        console.log('Usage: node index.js <username> [output-file.csv]');
+        process.exit(1);
+      }
+
+      const outputPath = outputFile || `${username}-repositories.csv`;
+      
+      console.log('Starting GitHub repository analysis...');
+      
+      const repositories = await this.processRepositories(username);
+      await this.generateCSV(repositories, outputPath);
+      
+      console.log('\n=== Summary ===');
+      console.log(`Total repositories: ${repositories.length}`);
+      console.log(`Private repositories: ${repositories.filter(r => r.private).length}`);
+      console.log(`Public repositories: ${repositories.filter(r => !r.private).length}`);
+      console.log(`Total stars: ${repositories.reduce((sum, r) => sum + r.stars, 0)}`);
+      console.log(`Output saved to: ${outputPath}`);
+      
+    } catch (error) {
+      console.error('Application error:', error.message);
+      process.exit(1);
+    }
+  }
+}
+
+// Main execution
+if (require.main === module) {
+  const username = process.argv[2];
+  const outputFile = process.argv[3];
+  
+  const lister = new GitHubRepoLister();
+  lister.run(username, outputFile);
+}
+
+module.exports = GitHubRepoLister;
